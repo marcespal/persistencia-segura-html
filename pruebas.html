@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pruebas de las guardas · persistencia segura</title>
+<style>
+body{margin:0;background:#F5F7FA;color:#1B2733;font:14px/1.5 "Segoe UI",system-ui,Arial,sans-serif}
+.wrap{max-width:820px;margin:0 auto;padding:24px 20px 60px}
+h1{font-size:19px;color:#1F4E79;margin:0 0 4px}
+p.sub{color:#5B6B7B;font-size:12.5px;margin:0 0 18px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid #DDE4EC;border-radius:8px;overflow:hidden}
+th,td{text-align:left;padding:9px 12px;border-top:1px solid #DDE4EC;font-size:13px;vertical-align:top}
+th{background:#EAF1F8;color:#1F4E79;border-top:none;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em}
+.ok{color:#1E6B34;font-weight:700}
+.mal{color:#8A2A0B;font-weight:700}
+#resumen{margin-top:16px;font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Pruebas de las guardas</h1>
+  <p class="sub">Se ejecutan contra un <code>FileSystemFileHandle</code> simulado, sin tocar
+  ningún archivo real. Abre esta página servida por HTTP (no <code>file://</code>): el módulo
+  necesita un origen con <code>localStorage</code> e <code>IndexedDB</code> propios.</p>
+  <table><thead><tr><th style="width:38px">#</th><th>Caso</th><th style="width:78px">Resultado</th><th>Detalle</th></tr></thead>
+  <tbody id="filas"></tbody></table>
+  <div id="resumen"></div>
+</div>
+
+<script src="persistencia-segura.js"></script>
+<script>
+/* ── arnés ────────────────────────────────────────────────────────────── */
+const filas = document.getElementById("filas");
+let pasan = 0, fallan = 0;
+function caso(n, titulo, cond, detalle){
+  if(cond) pasan++; else fallan++;
+  filas.insertAdjacentHTML("beforeend",
+    `<tr><td>${n}</td><td>${titulo}</td><td class="${cond?"ok":"mal"}">${cond?"pasa":"falla"}</td><td>${detalle||""}</td></tr>`);
+}
+
+/* Manejador de archivo simulado: guarda su contenido en memoria y registra
+   cada escritura, para poder afirmar que NO se escribió. */
+function handleFalso(contenido, romper){
+  const h = {
+    name: "archivo-de-prueba.json",
+    contenido, escrituras: 0,
+    async getFile(){
+      if(romper) throw new Error("fallo de lectura");
+      return new File([h.contenido], h.name, {type:"application/json"});
+    },
+    async createWritable(){
+      return { async write(t){ h.contenido = t; h.escrituras++; }, async close(){} };
+    },
+    async queryPermission(){ return "granted"; },
+    async requestPermission(){ return "granted"; }
+  };
+  return h;
+}
+
+const conNotas = JSON.stringify({app:"prueba", notas:["una","dos"], meta:{guardadoEn:"x"}});
+
+/* Estado de la herramienta simulada */
+let S = {app:"prueba", notas:[], meta:{guardadoEn:""}};
+let avisos = [];
+
+function nuevaPersistencia(sufijo){
+  return crearPersistencia({
+    clave: "pruebas_guardas_" + sufijo,
+    estado: () => S,
+    cargarEstado: d => { S = JSON.parse(JSON.stringify(d)); },
+    estadoVacio: () => !S.notas.length,
+    datosVacios: d => !(d && (d.notas||[]).length),
+    validar: d => !!(d && d.app === "prueba"),
+    resumen: d => ((d.notas||[]).length + " notas"),
+    clavePorContenido: s => JSON.stringify(Object.assign({}, s, {meta:{guardadoEn:""}})),
+    aviso: (t) => avisos.push(t),
+    marcar: () => {}, render: () => {}
+  });
+}
+
+/* Cada ejecución arranca en limpio: si no, los respaldos de la corrida
+   anterior seguirían en IndexedDB y el conteo del caso D no cuadraría. */
+function borrarBases(sufijos){
+  return Promise.all(sufijos.map(s => new Promise(res => {
+    const r = indexedDB.deleteDatabase("pruebas_guardas_" + s + "__fs");
+    r.onsuccess = r.onerror = r.onblocked = () => res();
+  })));
+}
+
+/* ── casos ────────────────────────────────────────────────────────────── */
+(async () => {
+  await borrarBases(["a","b","c","d","e"]);
+
+  /* A · pantalla vacía + archivo con contenido → no escribe, desvincula, avisa */
+  {
+    const P = nuevaPersistencia("a"), h = handleFalso(conNotas);
+    S = {app:"prueba", notas:[], meta:{}}; avisos = [];
+    window.showOpenFilePicker = async () => [h];
+    /* se vincula con la pantalla vacía: el módulo carga el archivo, no lo pisa */
+    await P.vincular();
+    const cargoElArchivo = S.notas.length === 2 && h.escrituras === 0;
+    caso("A1", "Vincular con la pantalla vacía carga el archivo y no lo reescribe",
+         cargoElArchivo, "escrituras: " + h.escrituras);
+
+    /* ahora se simula la pérdida del localStorage: la pantalla queda en blanco
+       con el archivo todavía vinculado */
+    S = {app:"prueba", notas:[], meta:{}};
+    const ok = await P.guardarArchivo();
+    caso("A2", "Estado vacío sobre archivo con contenido: no escribe y desvincula",
+         ok === false && h.escrituras === 0 && P.archivo() === null && avisos.length === 1,
+         "escrituras: " + h.escrituras + " · aviso: " + (avisos[0]||"ninguno"));
+  }
+
+  /* B · pantalla vacía + archivo ilegible → no escribe, avisa */
+  {
+    const P = nuevaPersistencia("b"), h = handleFalso(conNotas);
+    S = {app:"prueba", notas:["algo"], meta:{}}; avisos = [];
+    window.showOpenFilePicker = async () => [h];
+    window.confirm = () => false;              // conservar lo de pantalla
+    await P.vincular();
+    const escrituras0 = h.escrituras;
+    S = {app:"prueba", notas:[], meta:{}};
+    h.getFile = async () => { throw new Error("fallo de lectura"); };
+    const ok = await P.guardarArchivo();
+    caso("B", "Lectura fallida con la pantalla vacía: no escribe nada",
+         ok === false && h.escrituras === escrituras0 && avisos.length === 1,
+         "escrituras tras el fallo: " + (h.escrituras - escrituras0));
+  }
+
+  /* C · vincular un archivo ilegible → ni vincula ni escribe */
+  {
+    const P = nuevaPersistencia("c"), h = handleFalso("{esto no es json", false);
+    S = {app:"prueba", notas:["algo"], meta:{}}; avisos = [];
+    window.showOpenFilePicker = async () => [h];
+    const r = await P.vincular();
+    caso("C", "Vincular un archivo ilegible sale sin escribir",
+         r.ok === false && r.motivo === "ilegible" && h.escrituras === 0 && P.archivo() === null,
+         "motivo: " + r.motivo + " · escrituras: " + h.escrituras);
+  }
+
+  /* D · pantalla con contenido → escribe y genera respaldo */
+  {
+    const P = nuevaPersistencia("d"), h = handleFalso("");
+    S = {app:"prueba", notas:["uno"], meta:{guardadoEn:"t1"}}; avisos = [];
+    window.showOpenFilePicker = async () => [h];
+    window.confirm = () => false;
+    await P.vincular();
+    const trasPrimera = h.escrituras, contenido1 = h.contenido;
+    const resp1 = (await P.respaldos()).length;
+
+    /* segunda escritura con el mismo contenido: no debe gastar una ranura */
+    S.meta.guardadoEn = "t2";
+    await P.guardarArchivo();
+    const resp2 = (await P.respaldos()).length;
+
+    /* tercera, con contenido distinto: sí suma */
+    S.notas.push("dos");
+    await P.guardarArchivo();
+    const resp3 = (await P.respaldos()).length;
+
+    caso("D1", "Pantalla con contenido: escribe el archivo",
+         trasPrimera >= 1 && JSON.parse(contenido1).notas.length === 1,
+         "escrituras en la vinculación: " + trasPrimera);
+    caso("D2", "Guardar dos veces lo mismo no gasta una ranura de respaldo",
+         resp2 === resp1, "respaldos: " + resp1 + " → " + resp2);
+    caso("D3", "Un cambio real sí suma un respaldo",
+         resp3 === resp2 + 1, "respaldos: " + resp2 + " → " + resp3);
+  }
+
+  /* E · el respaldo nunca respalda la nada */
+  {
+    const P = nuevaPersistencia("e");
+    S = {app:"prueba", notas:[], meta:{}};
+    await P.respaldar();
+    caso("E", "Con la pantalla vacía no se genera respaldo",
+         (await P.respaldos()).length === 0, "");
+  }
+
+  document.getElementById("resumen").innerHTML =
+    fallan ? `<span class="mal">${fallan} caso(s) fallan</span> · ${pasan} pasan`
+           : `<span class="ok">Los ${pasan} casos pasan.</span>`;
+})();
+</script>
+</body>
+</html>

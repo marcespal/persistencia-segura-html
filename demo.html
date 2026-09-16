@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demostración · persistencia segura</title>
+<style>
+:root{--azul:#1F4E79;--linea:#DDE4EC;--fondo:#F5F7FA;--gris:#5B6B7B;--amar:#FFF2CC;--amar-t:#7A5B00}
+*{box-sizing:border-box}
+body{margin:0;background:var(--fondo);color:#1B2733;font:14px/1.45 "Segoe UI",system-ui,Arial,sans-serif}
+.wrap{max-width:760px;margin:0 auto;padding:0 20px 60px}
+header{background:var(--azul);color:#fff;padding:16px 0}
+header h1{margin:0;font-size:18px}
+header .sub{color:#C3D6E8;font-size:12.5px;margin-top:3px}
+.acciones{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px;align-items:center}
+button{font:inherit;font-size:13px;cursor:pointer;background:#fff;color:var(--azul);
+  border:1px solid var(--linea);border-radius:6px;padding:6px 12px;font-weight:600}
+.pill{font-size:11.5px;padding:4px 10px;border-radius:20px;background:#2A5C8A;color:#D8E7F5}
+.pill.ok{background:#1E6B34;color:#E4F5E9}
+.pill.warn{background:var(--amar);color:var(--amar-t)}
+.pill.vinc{background:#EAF1F8;color:var(--azul)}
+.panel{background:#fff;border:1px solid var(--linea);border-radius:8px;padding:16px;margin-top:18px}
+.nota{background:#fff;border:1px solid var(--linea);border-left:3px solid var(--azul);
+  border-radius:6px;padding:10px 12px;margin-top:14px;font-size:12.5px;color:var(--gris)}
+ul{list-style:none;padding:0;margin:12px 0 0}
+li{display:flex;gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--linea)}
+li input{flex:1;font:inherit;border:1px solid var(--linea);border-radius:5px;padding:5px 7px}
+li button{padding:4px 9px}
+.capa{position:fixed;inset:0;background:rgba(15,28,42,.55);display:none;
+  align-items:center;justify-content:center;padding:20px;z-index:50}
+.capa.ver{display:flex}
+.caja{background:#fff;border-radius:10px;max-width:520px;padding:20px 22px}
+.caja h2{margin:0 0 8px;font-size:16px;color:var(--azul)}
+.caja p{margin:0 0 14px;font-size:13px}
+</style>
+</head>
+<body>
+
+<header><div class="wrap">
+  <h1>Demostración · persistencia segura</h1>
+  <div class="sub">Una lista de notas con las tres guardas puestas. Sirve para probarlas, no para usarla.</div>
+  <div class="acciones">
+    <span class="pill" id="estado">Listo</span>
+    <button id="bVincular">Abrir y vincular archivo</button>
+    <button id="bNuevo">Archivo nuevo</button>
+    <button id="bRecargar">Recargar del archivo</button>
+    <button id="bDescargar">Descargar JSON</button>
+    <button id="bRespaldos">Respaldos</button>
+  </div>
+</div></header>
+
+<div class="wrap">
+  <div class="panel">
+    <b>Notas</b>
+    <ul id="lista"></ul>
+    <div style="margin-top:12px"><button id="bAgregar">Agregar nota</button></div>
+  </div>
+
+  <div class="nota">
+    <b>Cómo probar la guarda 2 (la que evita la pérdida):</b> vincula un archivo,
+    escribe un par de notas y espera a que diga «Guardado en …». Luego borra el
+    almacenamiento del sitio en las herramientas del navegador y recarga: la
+    pantalla arranca vacía, pero el archivo no se sobrescribe — aparece el aviso
+    y se desvincula. <br><br>
+    <b>La guarda 3:</b> abre este mismo archivo en una segunda pestaña.
+  </div>
+</div>
+
+<!-- Los avisos que evitan una pérdida de datos no pueden ser alert(): se cierran
+     con Enter sin leerse. Capa propia, con un botón que hay que pulsar. -->
+<div class="capa" id="capaAviso"><div class="caja">
+  <h2 id="avisoTitulo"></h2><p id="avisoCuerpo"></p>
+  <button id="avisoCerrar">Entendido</button>
+</div></div>
+
+<div class="capa" id="capaBloqueo"><div class="caja">
+  <h2>Ya está abierta en otra pestaña</h2>
+  <p id="bloqueoTexto"></p>
+  <button id="bloqueoReintentar">Ya la cerré, reintentar</button>
+  <button id="bloqueoIgual">Abrir de todos modos</button>
+</div></div>
+
+<script src="persistencia-segura.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+/* estado de la herramienta: lo único que esta demo sabe hacer */
+let S = { app:"demo-persistencia", version:1, notas:[], meta:{guardadoEn:""} };
+
+function render(){
+  $("#lista").innerHTML = S.notas.map((t,i)=>
+    `<li><input value="${esc(t)}" data-i="${i}"><button data-rm="${i}">Quitar</button></li>`).join("")
+    || `<li style="border:none;color:#5B6B7B">Sin notas todavía.</li>`;
+  $("#bRecargar").style.display = P.archivo() ? "" : "none";
+}
+function marcar(txt, tono){
+  const p = $("#estado"); p.textContent = txt; p.className = "pill "+(tono||"");
+}
+
+const P = crearPersistencia({
+  clave: "demo_persistencia_v1",
+  estado: () => S,
+  cargarEstado: d => { S = Object.assign({app:"demo-persistencia",version:1,notas:[],meta:{}}, d); },
+  estadoVacio: () => !S.notas.length,
+  datosVacios: d => !(d && (d.notas||[]).length),
+  validar: d => !!(d && d.app === "demo-persistencia"),
+  resumen: d => ((d.notas||[]).length + " notas"),
+  clavePorContenido: s => JSON.stringify(Object.assign({}, s, {meta:{guardadoEn:""}})),
+  nombreArchivo: () => "notas-" + new Date().toISOString().slice(0,10) + ".json",
+  aviso: (titulo, html) => { $("#avisoTitulo").textContent = titulo;
+                             $("#avisoCuerpo").innerHTML = html;
+                             $("#capaAviso").classList.add("ver"); },
+  marcar, render
+});
+
+/* ── interacción ─────────────────────────────────────────────────────── */
+$("#lista").addEventListener("input", ev => {
+  const i = ev.target.dataset.i; if(i===undefined) return;
+  S.notas[+i] = ev.target.value; S.meta.guardadoEn = new Date().toISOString(); P.tocar();
+});
+$("#lista").addEventListener("click", ev => {
+  const i = ev.target.dataset.rm; if(i===undefined) return;
+  S.notas.splice(+i,1); render(); P.tocar();
+});
+$("#bAgregar").onclick = () => { S.notas.push(""); render(); P.tocar(); };
+$("#bVincular").onclick = async () => {
+  const r = await P.vincular();
+  if(!r.ok && r.motivo==="sin-api") alert("Este navegador no permite vincular archivos. Usa Chrome o Edge.");
+  render();
+};
+$("#bNuevo").onclick    = async () => { await P.archivoNuevo(); render(); };
+$("#bRecargar").onclick = async () => { await P.recargarDesdeArchivo(); render(); };
+$("#bDescargar").onclick = () => P.descargar();
+$("#bRespaldos").onclick = async () => {
+  const lista = await P.respaldos();
+  if(!lista.length){ alert("Todavía no hay respaldos: se genera uno antes de cada escritura al archivo."); return; }
+  const menu = lista.map((r,i)=>(i+1)+") "+new Date(r.ts).toLocaleString()+" — "+r.resumen).join("\n");
+  const q = prompt("Respaldos en este navegador:\n\n"+menu+"\n\nNúmero a restaurar, o cancela.");
+  const r = lista[(+q||0)-1]; if(!r) return;
+  S = JSON.parse(r.txt); render(); P.tocar();
+  /* Al restaurar conviene descargar también el JSON: la recuperación no debería
+     depender del mismo almacenamiento que acaba de fallar. */
+  P.descargar("respaldo-restaurado.json");
+};
+$("#avisoCerrar").onclick = () => $("#capaAviso").classList.remove("ver");
+
+const TEXTO_BLOQUEO = "Esta demostración ya está abierta en otra pestaña de este navegador. "+
+  "Las dos comparten la misma memoria y el mismo archivo, así que la última en guardar pisaría a la otra.";
+function bloquear(){ $("#bloqueoTexto").textContent = TEXTO_BLOQUEO;
+                     $("#capaBloqueo").classList.add("ver"); }
+$("#bloqueoReintentar").onclick = async () => {
+  if(await P.hayOtraPestana()){
+    $("#bloqueoTexto").textContent = TEXTO_BLOQUEO + " La otra pestaña sigue abierta.";
+    return;
+  }
+  $("#capaBloqueo").classList.remove("ver"); P.entrar({alArrancar:arrancar});
+};
+$("#bloqueoIgual").onclick = () => {
+  if(!confirm("Los cambios de una pestaña pueden sobrescribir los de la otra. ¿Continuar?")) return;
+  $("#capaBloqueo").classList.remove("ver"); P.entrar({alArrancar:arrancar});
+};
+
+function arrancar(habia){ marcar(habia ? "Notas restauradas" : "Listo", habia ? "ok" : ""); render(); }
+P.iniciar({ alBloquear: bloquear, alArrancar: arrancar });
+</script>
+</body>
+</html>
