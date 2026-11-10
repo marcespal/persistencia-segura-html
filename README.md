@@ -162,6 +162,40 @@ Dos detalles que importan:
   y está vacío» permite dar mensajes distintos y decidir distinto.
 - Si se acaba de cargar el contenido del archivo, **no hay nada que escribir de
   vuelta**. Escribir ahí solo añade una oportunidad de fallar.
+- Si el archivo coincide con la pantalla (según `clavePorContenido`), no hay nada
+  que preguntar: se vincula sin `confirm()` y sin escribir.
+
+**La misma guarda, un piso más abajo: `localStorage`.** Si en el navegador había
+algo guardado y no se pudo leer (JSON roto, o de otra herramienta), la pantalla
+arranca con lo que ponga la app — en blanco o un ejemplo — y el primer
+autoguardado, o el `beforeunload`, lo escribe encima. Es el mismo error del
+archivo: una lectura fallida que termina en escritura.
+
+```js
+function restaurarLocal() {
+  let raw = null;
+  try { raw = localStorage.getItem(CLAVE); } catch (e) { return false; }
+  if (!raw) return false;                  // no había nada: sí se puede escribir
+  try { const d = JSON.parse(raw); if (!validar(d)) throw 0; cargarEstado(d); return true; }
+  catch (e) { ilegibleLocal = true; crudoLocal = raw; return false; }   // ← bloqueado
+}
+function guardarLocal() {
+  if (ilegibleLocal) return false;         // no se escribe sobre lo que no se pudo leer
+  /* … */
+}
+```
+
+El autoguardado queda en pausa hasta que el usuario decide: `P.crudoIlegible()`
+le permite descargar el contenido tal cual, y recién después `P.liberarLocal()`
+lo descarta y reanuda. La app nunca levanta el bloqueo sola.
+
+**Reconectar el archivo recordado sin volver a buscarlo.** Tras recargar la
+página, el navegador vuelve a pedir permiso de escritura y eso exige un clic: el
+manejador queda en `P.pendiente()`. Si la interfaz no lo muestra, todo se guarda
+solo en el navegador y el usuario cree que sigue escribiendo en su archivo.
+`P.reconectarPendiente()`, llamado desde un clic, pide el permiso y vincula por
+el mismo camino que `P.vincular()`, con la guarda 1 puesta. Conviene que el
+botón de guardar diga *Reconectar* mientras haya uno pendiente.
 
 ### Guarda 2 — nunca escribir vacío sobre contenido
 
@@ -365,6 +399,8 @@ pierde trabajo aunque haya archivo. La condición correcta es solo `sucio`.
 **Estado y arranque**
 
 - [ ] ¿Qué pasa si `localStorage` viene vacío y hay un archivo recordado?
+- [ ] ¿Y si `localStorage` trae algo ilegible? ¿El autoguardado o el `beforeunload` lo pisan?
+- [ ] Tras recargar, ¿el usuario ve que su archivo espera permiso, o todo se guarda solo en el navegador sin que lo note?
 - [ ] ¿El usuario nota cuando la app arrancó en blanco, o parece normal?
 - [ ] ¿Se distingue «no se pudo leer» de «se leyó y está vacío»?
 
@@ -403,6 +439,9 @@ const handleFalso = (contenido, romper) => ({
 | B | vacío | ilegible | no escribe · avisa |
 | C | con contenido | cualquiera | escribe · genera respaldo |
 | D | con contenido | cualquiera | segunda escritura idéntica no gasta ranura |
+| F | — | — (`localStorage` ilegible) | no autoguarda encima · conserva el texto crudo · solo `liberarLocal()` reanuda |
+| G | con contenido | idéntico a la pantalla | vincula sin preguntar y sin escribir |
+| H | cualquiera | ninguno pendiente | `reconectarPendiente()` sale con `sin-pendiente` |
 
 Están implementados en `pruebas.html`, que los ejecuta contra el módulo de
 referencia y muestra el resultado en una tabla.
@@ -457,13 +496,15 @@ P.iniciar({ alBloquear: mostrarBloqueo, alArrancar: habia => pintar() });
 |---|---|
 | `P.tocar()` | Llámalo en cada cambio del usuario: autoguarda con *debounce* al navegador y, si hay archivo vinculado, a disco |
 | `P.vincular()` | Abre el selector y vincula con la **guarda 1** puesta |
+| `P.reconectarPendiente()` | Tras recargar, pide permiso para el archivo recordado y lo vincula con la **guarda 1**; llamarlo desde un clic |
 | `P.archivoNuevo()` | Crea un archivo y vincula, preguntando si el elegido ya tenía contenido |
 | `P.guardarArchivo()` | Escritura con la **guarda 2** y respaldo previo |
 | `P.recargarDesdeArchivo()` | Trae los cambios hechos desde otro equipo |
 | `P.descargar(nombre)` | Exporta el JSON, sin depender de la File System Access API |
 | `P.respaldos()` | Las últimas versiones previas a una escritura |
 | `P.iniciar(op)` / `P.entrar(op)` | Arranque con la **guarda 3**; `entrar` es la salida del bloqueo |
-| `P.archivo()`, `P.sucio()`, `P.ultimoGuardado()` | Estado, para pintar la interfaz |
+| `P.archivo()`, `P.pendiente()`, `P.sucio()`, `P.ultimoGuardado()` | Estado, para pintar la interfaz |
+| `P.localIlegible()`, `P.crudoIlegible()`, `P.liberarLocal()` | `localStorage` que no se pudo leer: avisar, ofrecer descargarlo y, a pedido del usuario, reanudar |
 
 El aviso al cerrar con cambios pendientes y la liberación del turno de pestaña
 quedan registrados por el propio módulo.

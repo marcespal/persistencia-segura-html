@@ -90,7 +90,8 @@ function borrarBases(sufijos){
 
 /* ── casos ────────────────────────────────────────────────────────────── */
 (async () => {
-  await borrarBases(["a","b","c","d","e"]);
+  await borrarBases(["a","b","c","d","e","f","g","h"]);
+  localStorage.removeItem("pruebas_guardas_f");
 
   /* A · pantalla vacía + archivo con contenido → no escribe, desvincula, avisa */
   {
@@ -175,6 +176,49 @@ function borrarBases(sufijos){
     await P.respaldar();
     caso("E", "Con la pantalla vacía no se genera respaldo",
          (await P.respaldos()).length === 0, "");
+  }
+
+  /* F · localStorage ilegible → el autoguardado no lo pisa hasta que el usuario decida */
+  {
+    const roto = "{esto no es json";
+    localStorage.setItem("pruebas_guardas_f", roto);
+    const P = nuevaPersistencia("f");
+    S = {app:"prueba", notas:[], meta:{}};
+    const leyo = P.restaurarLocal();
+    S = {app:"prueba", notas:["trabajo nuevo"], meta:{}};
+    const escribio = P.guardarLocal();
+    caso("F1", "Lo guardado en el navegador no se pudo leer: el autoguardado no lo pisa",
+         leyo === false && escribio === false && P.localIlegible() === true
+           && localStorage.getItem("pruebas_guardas_f") === roto,
+         "guardarLocal: " + escribio);
+    caso("F2", "Se conserva el texto crudo para poder rescatarlo",
+         P.crudoIlegible() === roto, "");
+    const reanudo = P.liberarLocal();
+    caso("F3", "Solo liberarLocal() reanuda el autoguardado",
+         reanudo === true && P.localIlegible() === false
+           && JSON.parse(localStorage.getItem("pruebas_guardas_f")).notas[0] === "trabajo nuevo", "");
+    localStorage.removeItem("pruebas_guardas_f");
+  }
+
+  /* G · archivo idéntico a la pantalla → vincula sin preguntar ni escribir */
+  {
+    const P = nuevaPersistencia("g"), h = handleFalso(conNotas);
+    S = JSON.parse(conNotas); avisos = [];
+    let pregunto = false;
+    window.confirm = () => { pregunto = true; return false; };
+    window.showOpenFilePicker = async () => [h];
+    const r = await P.vincular();
+    caso("G", "Vincular un archivo idéntico a la pantalla no pregunta ni escribe",
+         r.ok === true && !pregunto && h.escrituras === 0 && P.archivo() === h,
+         "preguntó: " + pregunto + " · escrituras: " + h.escrituras);
+  }
+
+  /* H · reconectar sin archivo pendiente → sale sin hacer nada */
+  {
+    const P = nuevaPersistencia("h");
+    const r = await P.reconectarPendiente();
+    caso("H", "Reconectar sin archivo recordado sale sin vincular",
+         r.ok === false && r.motivo === "sin-pendiente" && P.archivo() === null, "motivo: " + r.motivo);
   }
 
   document.getElementById("resumen").innerHTML =

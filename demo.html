@@ -41,6 +41,7 @@ li button{padding:4px 9px}
   <div class="sub">Una lista de notas con las tres guardas puestas. Sirve para probarlas, no para usarla.</div>
   <div class="acciones">
     <span class="pill" id="estado">Listo</span>
+    <button id="bReconectar">Reconectar archivo</button>
     <button id="bVincular">Abrir y vincular archivo</button>
     <button id="bNuevo">Archivo nuevo</button>
     <button id="bRecargar">Recargar del archivo</button>
@@ -93,6 +94,10 @@ function render(){
     `<li><input value="${esc(t)}" data-i="${i}"><button data-rm="${i}">Quitar</button></li>`).join("")
     || `<li style="border:none;color:#5B6B7B">Sin notas todavía.</li>`;
   $("#bRecargar").style.display = P.archivo() ? "" : "none";
+  /* tras recargar, el archivo recordado espera un clic para volver a escribirse */
+  const pend = !P.archivo() && P.pendiente();
+  $("#bReconectar").style.display = pend ? "" : "none";
+  if(pend) $("#bReconectar").textContent = "Reconectar " + P.pendiente().name;
 }
 function marcar(txt, tono){
   const p = $("#estado"); p.textContent = txt; p.className = "pill "+(tono||"");
@@ -129,6 +134,7 @@ $("#bVincular").onclick = async () => {
   if(!r.ok && r.motivo==="sin-api") alert("Este navegador no permite vincular archivos. Usa Chrome o Edge.");
   render();
 };
+$("#bReconectar").onclick = async () => { await P.reconectarPendiente(); render(); };
 $("#bNuevo").onclick    = async () => { await P.archivoNuevo(); render(); };
 $("#bRecargar").onclick = async () => { await P.recargarDesdeArchivo(); render(); };
 $("#bDescargar").onclick = () => P.descargar();

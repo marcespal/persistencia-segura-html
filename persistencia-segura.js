@@ -1,5 +1,5 @@
 /* ─────────────────────────────────────────────────────────────────────────
-   persistencia-segura.js · v1.0
+   persistencia-segura.js · v1.1
 
    Guardado seguro para herramientas HTML de un solo archivo que conservan el
    trabajo del usuario en localStorage y, opcionalmente, en un archivo local
@@ -124,22 +124,39 @@ function crearPersistencia(cfg) {
     } catch (e) { return false; }
   }
 
-  /* ── localStorage ─────────────────────────────────────────────────────── */
+  /* ── localStorage ─────────────────────────────────────────────────────
+     GUARDA 1 aplicada también al navegador:
+     si en localStorage había algo y no se pudo leer, la pantalla arranca con
+     lo que sea que ponga la app — el ejemplo, en blanco — y el primer
+     guardado, o el `beforeunload`, lo escribiría encima. Es el mismo error
+     del archivo, un piso más abajo: una lectura fallida no puede terminar en
+     escritura. Se conserva el texto crudo para poder rescatarlo. */
+  let ilegibleLocal = false, crudoLocal = null;
+
   function guardarLocal() {
     if (!almacenOK) return false;
+    if (ilegibleLocal) return false;        // ← no se escribe sobre lo que no se pudo leer
     try { localStorage.setItem(CLAVE, JSON.stringify(C.estado())); sucio = false; return true; }
     catch (e) { almacenOK = false; return false; }
   }
   function restaurarLocal() {
+    let raw = null;
+    try { raw = localStorage.getItem(CLAVE); }
+    catch (e) { almacenOK = false; return false; }
+    if (!raw) return false;                 // no había nada: sí se puede escribir
     try {
-      const raw = localStorage.getItem(CLAVE);
-      if (!raw) return false;
       const d = JSON.parse(raw);
-      if (!C.validar(d)) return false;
+      if (!C.validar(d)) throw new Error("el contenido guardado no es de esta herramienta");
       C.cargarEstado(d);
       return true;
-    } catch (e) { return false; }
+    } catch (e) {
+      ilegibleLocal = true; crudoLocal = raw;
+      return false;                         // había algo y no se pudo leer: queda bloqueado
+    }
   }
+  /* El bloqueo lo levanta el usuario, nunca la app sola: primero que rescate
+     el contenido, después decide descartarlo. */
+  function liberarLocal() { ilegibleLocal = false; crudoLocal = null; return guardarLocal(); }
 
   /* ── respaldo rotativo ────────────────────────────────────────────────
      Las últimas versiones previas a una escritura, en IndexedDB. Es el
@@ -246,7 +263,24 @@ function crearPersistencia(cfg) {
     let h;
     try { [h] = await global.showOpenFilePicker({ types: C.tiposArchivo, multiple: false }); }
     catch (e) { return { ok: false, motivo: "cancelado" }; }
+    return vincularHandle(h);
+  }
 
+  /* Reconectar el archivo recordado. Tras recargar, el navegador pide permiso
+     otra vez y eso exige un clic: sin esta función la única salida era volver
+     a buscarlo con el selector, y mientras tanto todo se guardaba solo en el
+     navegador sin que nadie lo notara. Se llama desde un clic del usuario. */
+  async function reconectarPendiente() {
+    const h = handlePendiente;
+    if (!h) return { ok: false, motivo: "sin-pendiente" };
+    if (!await permisoEscritura(h)) {
+      C.marcar("Sin permiso para " + h.name, "warn");
+      return { ok: false, motivo: "sin-permiso" };
+    }
+    return vincularHandle(h);
+  }
+
+  async function vincularHandle(h) {
     let d = null, fallo = false;
     try { d = await leerJSONde(h); } catch (e) { fallo = true; }
 
@@ -262,7 +296,10 @@ function crearPersistencia(cfg) {
     let escribir = true;
     if (d) {
       let cargar = true;
-      if (!C.estadoVacio()) {
+      const clave = x => C.clavePorContenido ? C.clavePorContenido(x) : JSON.stringify(x);
+      if (!C.estadoVacio() && clave(d) === clave(C.estado())) {
+        cargar = false; escribir = false;      /* son iguales: no hay nada que preguntar */
+      } else if (!C.estadoVacio()) {
         cargar = global.confirm(
           "El archivo contiene " + C.resumen(d) + ".\n\n" +
           "Aceptar: cargar el archivo y reemplazar lo que tienes en pantalla.\n" +
@@ -451,12 +488,16 @@ function crearPersistencia(cfg) {
     /* guardado */
     tocar, guardarLocal, restaurarLocal, guardarArchivo, descargar,
     /* archivo */
-    vincular, archivoNuevo, recargarDesdeArchivo, reconectarRecordado,
+    vincular, archivoNuevo, recargarDesdeArchivo, reconectarRecordado, reconectarPendiente,
     desvincular: async () => { fileHandle = null; await olvidarHandle(); C.render(); },
     /* respaldos */
     respaldos, respaldar,
     /* pestañas y arranque */
-    iniciar, entrar, hayOtraPestana, soltarPestana
+    iniciar, entrar, hayOtraPestana, soltarPestana,
+    /* lectura fallida del navegador */
+    localIlegible: () => ilegibleLocal,
+    crudoIlegible: () => crudoLocal,
+    liberarLocal
   };
 }
 
